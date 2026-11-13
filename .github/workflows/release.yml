@@ -5,290 +5,204 @@ on:
     branches:
       - main
     paths:
-      - 'src/**'
-      - 'packages/**'
+      - "src/**"
+      - "packages/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
 
 jobs:
-  release:
+  changelog:
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.changelog.outputs.version }}
+      body: ${{ steps.changelog.outputs.clean_changelog }}
+      tag: ${{ steps.changelog.outputs.tag }}
       skipped: ${{ steps.changelog.outputs.skipped }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Create changelog
+      - name: Checkout code 👋
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Create changelog ✍️
         id: changelog
-        uses: TriPSs/conventional-changelog-action@v3
+        uses: TriPSs/conventional-changelog-action@469f0e5e35831fbd1962706f29f65daf0a5723f2
         with:
           github-token: ${{ secrets.github_token }}
           skip-version-file: "true"
           output-file: "false"
           skip-commit: "true"
           skip-on-empty: "true"
-      - name: Create Github Release
-        id: create_release
-        uses: actions/create-release@v1
-        if: ${{ steps.changelog.outputs.skipped == 'false' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.github_token }}
+          skip-tag: "true"
+
+  android:
+    needs: changelog
+    if: ${{ needs.changelog.outputs.skipped == 'false' }}
+    runs-on: ubuntu-latest
+    container: ghcr.io/jandedobbeleer/golang-android-container:latest
+    steps:
+      - name: Checkout code 👋
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build 🏗
+        run: |
+          cd src
+          go build -o dist/posh-android-arm -ldflags="-s -w -X 'github.com/jandedobbeleer/oh-my-posh/src/build.Version=${{ needs.changelog.outputs.version }}' -X 'github.com/jandedobbeleer/oh-my-posh/src/build.Date=$(date)'"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          tag_name: ${{ steps.changelog.outputs.tag }}
-          release_name: ${{ steps.changelog.outputs.tag }}
-          body: ${{ steps.changelog.outputs.clean_changelog }}
+          name: android-artifact
+          path: src/dist/posh-android-arm
+
   artifacts:
-    needs: release
-    if: ${{ needs.release.outputs.skipped == 'false' }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        goarch: [amd64]
-        include:
-        - os: ubuntu-latest
-          goarch: arm64
-        - os: ubuntu-latest
-          goarch: arm
-        - os: windows-latest
-          goarch: 386
-        - os: windows-latest
-          goarch: arm64
-    runs-on: ${{ matrix.os }}
+    needs: changelog
+    if: ${{ needs.changelog.outputs.skipped == 'false' }}
+    runs-on: windows-latest
     defaults:
       run:
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/build
+    steps:
+      - name: Checkout code 👋
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install Go 🗳
+        uses: ./.github/workflows/composite/bootstrap-go
+      - name: Pre Build 😸
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          ./pre.ps1 -Version ${{ needs.changelog.outputs.version }} -SDKVersion "10.0.26100.0"
+      - name: Run GoReleaser 🚀
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de
+        with:
+          distribution: goreleaser
+          version: v2.3.2
+          args: release --clean --skip publish
+          workdir: src
+        env:
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      - name: Package Go module dependencies 📦
         working-directory: ${{ github.workspace }}/src
-    outputs:
-      hash_linux: ${{ steps.hash.outputs.hash_ubuntu-latest }}
-      hash_macos: ${{ steps.hash.outputs.hash_macos-latest }}
-      hash_windows: ${{ steps.hash.outputs.hash_windows-latest }}
-    steps:
-    - name: Install Go
-      uses: actions/setup-go@v2
-      with:
-        go-version: 1.17
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Asset name
-      id: artifact
-      run: |
-        if ($IsLinux) {
-            $artifact = "posh-linux-${{ matrix.goarch }}"
-            Write-Output "::set-output name=name::$($artifact)"
-            return
-        }
-        if ($IsMacOS) {
-            $artifact = "posh-darwin-${{ matrix.goarch }}"
-            Write-Output "::set-output name=name::$($artifact)"
-            return
-        }
-        if ($IsWindows) {
-            $artifact = "posh-windows-${{ matrix.goarch }}.exe"
-            Write-Output "::set-output name=name::$($artifact)"
-            return
-        }
-      shell: pwsh
-    - name: Build
-      id: build
-      run: go build -o ${{ steps.artifact.outputs.name }} -ldflags="-X 'main.Version=${{ needs.release.outputs.version }}'"
-      env:
-        GOARCH: ${{ matrix.goarch }}
-    - name: Hash
-      id: hash
-      run: |
-        $fileHash = Get-FileHash ${{ steps.artifact.outputs.name }} -Algorithm SHA256
-        $fileHash.Hash | Out-File -Encoding 'UTF8' ${{ steps.artifact.outputs.name }}.sha256
-        Write-Output "::set-output name=hash_${{ matrix.os }}::$($fileHash.Hash)"
-      shell: pwsh
-    - name: Upload Release Asset
-      id: upload-release-asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: src/${{ steps.artifact.outputs.name }}
-        asset_name: ${{ steps.artifact.outputs.name }}
-        asset_content_type: application/octet-stream
-    - name: Upload Hash Asset
-      id: upload-hash-asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: src/${{ steps.artifact.outputs.name }}.sha256
-        asset_name: ${{ steps.artifact.outputs.name }}.sha256
-        asset_content_type: text/plain
-  themes:
-    needs: release
-    if: ${{ needs.release.outputs.skipped == 'false' }}
-    runs-on: ubuntu-latest
-    outputs:
-      hash_themes: ${{ steps.hash.outputs.hash_themes }}
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Zip theme files
-      run: |
-        $compress = @{
-          Path = "themes\*.json"
-          CompressionLevel = "Fastest"
-          DestinationPath = "themes.zip"
-        }
-        Compress-Archive @compress
-    - name: Hash
-      id: hash
-      run: |
-        $fileHash = Get-FileHash themes.zip -Algorithm SHA256
-        $fileHash.Hash | Out-File -Encoding 'UTF8' themes.zip.sha256
-        Write-Output "::set-output name=hash_themes::$($fileHash.Hash)"
-    - name: Upload Themes
-      id: upload-themes
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: themes.zip
-        asset_name: themes.zip
-        asset_content_type: application/octet-stream
-    - name: Upload Themes Hash
-      id: upload-hash-asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: themes.zip.sha256
-        asset_name: themes.zip.sha256
-        asset_content_type: text/plain
-  homebrew:
-    needs: release
-    if: ${{ needs.release.outputs.skipped == 'false' }}
-    runs-on: ubuntu-latest
-    env:
-      GH_KEY: ${{ secrets.GH_PAT }}
-    steps:
-    - name: Push Version
-      run: |
-        curl -XPOST -u "jandedobbeleer:$GH_KEY" \
-        -H "Accept: application/vnd.github.everest-preview+json" \
-        -H "Content-Type: application/json" https://api.github.com/repos/jandedobbeleer/homebrew-oh-my-posh/actions/workflows/release.yml/dispatches \
-        --data '{"ref": "main", "inputs": {"version": "${{ needs.release.outputs.version }}"} }'
-  powershell:
-    needs: [release, artifacts]
-    if: ${{ needs.release.outputs.skipped == 'false' }}
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: pwsh
-        working-directory: ${{ github.workspace }}/packages/powershell/oh-my-posh
-    env:
-      PSGALLERY_KEY: ${{ secrets.PSGALLERY_KEY }}
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Pack and push
-      run: ./deploy.ps1 -BinVersion ${{ needs.release.outputs.version }} -ModuleVersion ${{ needs.release.outputs.version }} -Repository PSGallery -RepositoryAPIKey $env:PSGALLERY_KEY
-  scoop:
-    needs: [release, artifacts]
-    if: ${{ needs.release.outputs.skipped == 'false' }}
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: pwsh
-        working-directory: ${{ github.workspace }}/packages/scoop
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Update Template
-      run: ./build.ps1 -Version ${{ needs.release.outputs.version }}
-    - name: Upload Scoop JSON
-      id: upload-scoop-json
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/packages/scoop/oh-my-posh.json
-        asset_name: oh-my-posh.json
-        asset_content_type: text/plain
-    - name: Upload Scoop Archive
-      id: upload-scoop-post-install
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/packages/scoop/posh-windows-wsl-amd64.7z
-        asset_name: posh-windows-wsl-amd64.7z
-        asset_content_type: application/octet-stream
-    - name: Upload Scoop Archive Hash
-      id: upload-scoop-post-install-hash
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/packages/scoop/posh-windows-wsl-amd64.7z.sha256
-        asset_name: posh-windows-wsl-amd64.7z.sha256
-        asset_content_type: text/plain
-  inno:
-    needs: [release, artifacts]
-    if: ${{ needs.release.outputs.skipped == 'false' }}
+        run: |
+          $env:GOMODCACHE = Join-Path $env:RUNNER_TEMP "gomodcache"
+          go mod download -modcacherw
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          tar -acf "dist/oh-my-posh-${{ needs.changelog.outputs.version }}-deps.tar.xz" -C $env:RUNNER_TEMP gomodcache
+      - name: Post Build 🤐
+        run: |
+          ./post.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: build-artifacts
+          path: |
+            src/dist/posh-*
+            src/dist/themes.*
+            src/dist/checksums.*
+            src/dist/*-deps.tar.xz
+  msix:
+    needs:
+      - changelog
+      - artifacts
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        arch: [x64, arm64]
     defaults:
       run:
         shell: pwsh
-        working-directory: ${{ github.workspace }}/packages/inno
+        working-directory: ${{ github.workspace }}/packages/msix
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Build installer
-      run: ./build.ps1 -Architecture ${{ matrix.arch }}  -Version ${{ needs.release.outputs.version }}
-    - name: Output Hash
-      id: hash
-      run: |
-        $hash = Get-Content -Path Output/install-${{ matrix.arch }}.exe.sha256
-        Write-Output "::set-output name=hash_inno_${{ matrix.arch }}::$($hash)"
-    - name: Upload Inno Installer
-      id: upload-inno-installer
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/packages/inno/Output/install-${{ matrix.arch }}.exe
-        asset_name: install-${{ matrix.arch }}.exe
-        asset_content_type: text/plain
-    - name: Upload Inno Installer Hash
-      id: upload-inno-installer-hash
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/packages/inno/Output/install-${{ matrix.arch }}.exe.sha256
-        asset_name: install-${{ matrix.arch }}.exe.sha256
-        asset_content_type: text/plain
+      - name: Checkout code 👋
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: build-artifacts
+          path: dist
+      - name: Build installer 📦
+        id: build
+        env:
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          $version = '${{ needs.changelog.outputs.version }}'.TrimStart("v")
+          ./build.ps1 -Architecture ${{ matrix.arch }}  -Version $version -Copy -Sign -SDKVersion "10.0.26100.0"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: msix-artifact-${{ matrix.arch }}
+          path: |
+            packages/msix/out/install-${{ matrix.arch }}.msix
+            packages/msix/out/install-${{ matrix.arch }}.appinstaller
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - changelog
+      - artifacts
+      - msix
+      - android
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          merge-multiple: true
+      - name: Upload version file
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.CDN_CONNECTIONSTRING }}
+        run: |
+          echo v${{ needs.changelog.outputs.version }} > version.txt
+          az storage blob upload-batch --destination releases/v${{ needs.changelog.outputs.version }} --source .
+          az storage blob upload-batch --destination releases/v${{ needs.changelog.outputs.version }} --overwrite true --source . --pattern "*.appinstaller" --content-type "application/appinstaller"
+          az storage blob upload-batch --destination releases/latest --overwrite true --source .
+          az storage blob upload-batch --destination releases/latest --overwrite true --source . --pattern "*.appinstaller" --content-type "application/appinstaller"
+      - name: Create draft release 📝
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
+        with:
+          tag_name: ${{ needs.changelog.outputs.tag }}
+          body: ${{ needs.changelog.outputs.body }}
+          fail_on_unmatched_files: true
+          draft: true
+          token: ${{ secrets.GH_PAT }}
+          files: |
+            *
+      - name: Publish release 🎓
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: gh release edit ${{ needs.changelog.outputs.tag }} --draft=false --repo ${{ github.repository }}
   winget:
-    needs: [release, inno]
-    if: ${{ needs.release.outputs.skipped == 'false' }}
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: pwsh
-        working-directory: ${{ github.workspace }}/packages/winget
+    needs:
+      - changelog
+      - release
     env:
       WINGETCREATE_TOKEN: ${{ secrets.WINGETCREATE_TOKEN }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-    - name: Create manifest and submit PR
-      run: ./build.ps1 -Version ${{ needs.release.outputs.version }} -Token $env:WINGETCREATE_TOKEN
+    - name: Create manifest and submit PR 📦
+      shell: pwsh
+      run: |
+        Write-Host "Preparing to submit to WinGet repository..." -ForegroundColor Green
+
+        # Install the latest wingetcreate exe
+        # Need to do things this way, see https://github.com/PowerShell/PowerShell/issues/13138
+        Write-Verbose "Importing Appx module using Windows PowerShell compatibility"
+        Import-Module Appx -UseWindowsPowerShell -ErrorAction Stop
+
+        # Download and install Winget-Create msixbundle
+        $appxBundleFile = Join-Path -Path $env:TEMP -ChildPath "wingetcreate.msixbundle"
+        Write-Verbose "Downloading wingetcreate to: $appxBundleFile"
+
+        Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest/msixbundle" -OutFile $appxBundleFile -ErrorAction Stop
+        Add-AppxPackage -Path $appxBundleFile -ErrorAction Stop
+
+        Write-Verbose "Successfully installed wingetcreate"
+
+        # Submit the PR to WinGet repository
+        Write-Host "Submitting pull request to WinGet repository..." -ForegroundColor Green
+
+        $version = "${{ needs.changelog.outputs.tag }}"
+        $version = $version.TrimStart('v')
+
+        $urls = @(
+            "https://github.com/JanDeDobbeleer/oh-my-posh/releases/download/v$version/install-x64.msix|x64",
+            "https://github.com/JanDeDobbeleer/oh-my-posh/releases/download/v$version/install-arm64.msix|arm64"
+        )
+
+        wingetcreate update JanDeDobbeleer.OhMyPosh --version $version --token $env:WINGETCREATE_TOKEN --submit --urls $urls

@@ -2,116 +2,103 @@
   "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
   "blocks": [
     {
-      "type": "prompt",
       "alignment": "left",
       "segments": [
         {
-          "type": "os",
+          "foreground": "cyan",
           "style": "powerline",
-          "foreground": "cyan",
-          "properties": {
-            "prefix": "",
-            "postfix": "",
-            "wsl": "",
-            "wsl_separator": ""
-          }
+          "template": "{{ .Icon }}",
+          "type": "os"
         },
         {
-          "type": "path",
-          "style": "plain",
           "foreground": "cyan",
-          "properties": {
+          "options": {
             "style": "full"
-          }
+          },
+          "style": "plain",
+          "template": " {{ .Path }} ",
+          "type": "path"
         },
         {
-          "type": "git",
-          "style": "plain",
           "foreground": "lightYellow",
-          "properties": {
-            "prefix": ":: <lightBlue>git(</>",
-            "postfix": "<lightBlue>)</>",
-            "template": "{{ .HEAD }}"
-          }
+          "style": "plain",
+          "template": ":: <lightBlue>git(</>{{ .HEAD }}<lightBlue>)</>",
+          "type": "git"
         }
-      ]
+      ],
+      "type": "prompt"
     },
     {
-      "type": "prompt",
       "alignment": "right",
       "segments": [
         {
-          "type": "node",
-          "style": "plain",
           "foreground": "#68a063",
-          "properties": {
-            "display_version": true,
-            "prefix": " ",
-            "postfix": "",
+          "options": {
             "display_mode": "files",
-            "display_package_manager": true,
-            "yarn_icon": "/yarn",
-            "npm_icon": "/npm"
-          }
+            "fetch_package_manager": true,
+            "npm_icon": "/npm",
+            "yarn_icon": "/yarn"
+          },
+          "style": "plain",
+          "template": " {{ if .PackageManagerIcon }}{{ .PackageManagerIcon }} {{ end }}{{ .Full }}",
+          "type": "node"
         },
         {
-          "type": "crystal",
-          "style": "plain",
           "foreground": "#4063D8",
-          "properties": {
-            "display_version": true,
-            "display_mode": "files",
-            "prefix": " ",
-            "postfix": ""
-          }
-        },
-        {
-          "type": "ruby",
-          "style": "plain",
-          "foreground": "#DE3F24",
-          "properties": {
-            "display_version": true,
-            "prefix": " ",
-            "postfix": "",
+          "options": {
             "display_mode": "files"
-          }
+          },
+          "style": "plain",
+          "template": " {{ if .Error }}{{ .Error }}{{ else }}{{ .Full }}{{ end }}",
+          "type": "crystal"
         },
         {
-          "type": "python",
+          "foreground": "#DE3F24",
+          "options": {
+            "display_mode": "files"
+          },
           "style": "plain",
+          "template": " {{ if .Error }}{{ .Error }}{{ else }}{{ .Full }}{{ end }}",
+          "type": "ruby"
+        },
+        {
           "foreground": "#FED142",
-          "properties": {
-            "display_virtual_env": false,
-            "display_version": true,
-            "prefix": " ",
-            "postfix": "",
-            "display_mode": "context"
-          }
+          "options": {
+            "display_mode": "context",
+            "fetch_virtual_env": false
+          },
+          "style": "plain",
+          "template": " {{ if .Error }}{{ .Error }}{{ else }}{{ .Full }}{{ end }}",
+          "type": "python"
         },
         {
-          "type": "time",
+          "foreground": "lightGreen",
           "style": "plain",
-          "foreground": "lightGreen"
+          "template": " {{ .CurrentDate | date .Format }} ",
+          "type": "time"
         }
-      ]
+      ],
+      "type": "prompt"
     },
     {
-      "type": "prompt",
       "alignment": "left",
       "newline": true,
       "segments": [
         {
-          "type": "exit",
-          "style": "powerline",
           "foreground": "lightGreen",
-          "properties": {
-            "display_exit_code": false,
-            "always_enabled": true,
-            "error_color": "red",
-            "prefix": "\u279c"
-          }
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}red{{ end }}"
+          ],
+          "options": {
+            "always_enabled": true
+          },
+          "style": "powerline",
+          "template": "\u279c ",
+          "type": "status"
         }
-      ]
+      ],
+      "type": "prompt"
     }
-  ]
+  ],
+  "version": 4
 }
